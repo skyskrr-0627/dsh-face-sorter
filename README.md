@@ -30,7 +30,7 @@ models/buffalo_l/     det_10g.onnx + w600k_r50.onnx（不入库，由 setup.sh �
 需要 macOS / Linux，python 3.10+，[uv](https://github.com/astral-sh/uv)。
 
 ```bash
-git clone https://github.com/<you>/dsh-face-sorter.git
+git clone https://github.com/skyskrr-0627/dsh-face-sorter.git
 cd dsh-face-sorter
 ./setup.sh          # 约 300MB：onnxruntime + opencv + rawpy + buffalo_l 模型
 ```
