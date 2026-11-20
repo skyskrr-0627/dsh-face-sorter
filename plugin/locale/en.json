@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Face Sorter",
+    "description": "Group a folder of photos by face identity: every distinct person gets one group, no-face and multi-face shots are listed separately. Local, offline, nothing leaves your machine.",
+    "detail": "docs/DETAIL.md"
+  }
+}

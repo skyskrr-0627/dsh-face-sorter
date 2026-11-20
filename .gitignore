@@ -1,0 +1,10 @@
+# runtime, never committed
+.venv/
+.uvcache/
+models/
+data/
+__pycache__/
+*.py[cod]
+.DS_Store
+node_modules/
+*.log

@@ -1,0 +1,6 @@
+# dsh-face-sorter bundle patch
+#
+# Inserted by the DSH plugin loader; also usable by `dsh plugin --profile <p> add <path>`.
+- insert:
+    - id: face-sorter
+      name: dsh-face-sorter
