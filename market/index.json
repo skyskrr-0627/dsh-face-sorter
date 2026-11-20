@@ -52,6 +52,18 @@
       },
       "versions": [
         {
+          "version": "0.2.1",
+          "publishTimestamp": 1795180017,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/skyskrr-0627/dsh-face-sorter.git",
+            "commit": "712c5ba46a4a6fc6cd24f49fbedc2fb1107991f7"
+          },
+          "engines": {
+            "dsh": ">=0.2.2-rc.1 <0.3.0-0"
+          }
+        },
+        {
           "version": "0.2.0",
           "publishTimestamp": 1763642000,
           "source": {
