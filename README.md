@@ -24,6 +24,7 @@ plugin/               DSH 插件本体（host 路由 + Web 面板 + python worke
   client.js           Web 面板（无构建，原生 ESM 客户端模块）
   python/worker.py    推理：SCRFD 检测 + ArcFace 识别 + 聚类（onnxruntime）
   docs/DETAIL.md      面板与工具的详细说明
+market/index.json     插件市场索引（format 1），供 Discover 添加索引源
 ```
 
 运行时（venv、模型、扫描结果）默认在 `~/.dsh-face-sorter`；历史上放在工作区
@@ -42,6 +43,18 @@ github:skyskrr-0627/dsh-face-sorter
 ```
 
 首次安装要 clone 仓库，约 3–5 分钟。装完打开「人脸分组」面板，点一次 **准备运行环境**：它会在 `~/.dsh-face-sorter` 建虚拟环境、装 `onnxruntime`/`opencv`/`rawpy` 等依赖，并从 ModelScope 下载约 190MB 的 buffalo_l 模型（`det_10g.onnx`、`w600k_r50.onnx`）。有 uv 时用 uv（自动取 python 3.11），没有则退回系统 python 3.10+。
+
+**在插件市场里看到它**
+
+「插件」页的 Discover 标签只读取你自己添加的索引源（DSH 没有官方索引）。本仓库自带一份 format-1 索引：
+
+```
+https://raw.githubusercontent.com/skyskrr-0627/dsh-face-sorter/main/market/index.json
+```
+
+国内网络可用镜像地址：`https://cdn.jsdelivr.net/gh/skyskrr-0627/dsh-face-sorter@main/market/index.json`
+
+在 Discover 里「Add index source」填上面任一地址，就能搜到「人脸分组」并一键安装（版本 pinned 到具体 commit）。
 
 **方式二：本地检出（改代码时用）**
 
