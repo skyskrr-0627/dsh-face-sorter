@@ -1,6 +1,6 @@
 {
   "name": "dsh-face-sorter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Face sorter for DSH — batch image face grouping · 批量图片人脸分组与筛选",
   "type": "module",

@@ -41,7 +41,7 @@ plugin/               DSH 插件本体（host 路由 + Web 面板 + python worke
 github:skyskrr-0627/dsh-face-sorter
 ```
 
-装完打开「人脸分组」面板，点一次 **准备运行环境**：它会在 `~/.dsh-face-sorter` 建虚拟环境、装 `onnxruntime`/`opencv`/`rawpy` 等依赖，并从 ModelScope 下载约 190MB 的 buffalo_l 模型（`det_10g.onnx`、`w600k_r50.onnx`）。有 uv 时用 uv（自动取 python 3.11），没有则退回系统 python 3.10+。
+首次安装要 clone 仓库，约 3–5 分钟。装完打开「人脸分组」面板，点一次 **准备运行环境**：它会在 `~/.dsh-face-sorter` 建虚拟环境、装 `onnxruntime`/`opencv`/`rawpy` 等依赖，并从 ModelScope 下载约 190MB 的 buffalo_l 模型（`det_10g.onnx`、`w600k_r50.onnx`）。有 uv 时用 uv（自动取 python 3.11），没有则退回系统 python 3.10+。
 
 **方式二：本地检出（改代码时用）**
 
