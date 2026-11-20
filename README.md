@@ -49,10 +49,16 @@ github:skyskrr-0627/dsh-face-sorter
 「插件」页的 Discover 标签只读取你自己添加的索引源（DSH 没有官方索引）。本仓库自带一份 format-1 索引：
 
 ```
-https://raw.githubusercontent.com/skyskrr-0627/dsh-face-sorter/main/market/index.json
+https://gh-proxy.com/https://raw.githubusercontent.com/skyskrr-0627/dsh-face-sorter/main/market/index.json
 ```
 
-国内网络可用镜像地址：`https://cdn.jsdelivr.net/gh/skyskrr-0627/dsh-face-sorter@main/market/index.json`
+CDN 镜像（若上面失效可换）：
+
+```
+https://gcore.jsdelivr.net/gh/skyskrr-0627/dsh-face-sorter@main/market/index.json
+```
+
+原始的 `raw.githubusercontent.com` 直连在国内多数网络不通，所以上面给的是加速地址。
 
 在 Discover 里「Add index source」填上面任一地址，就能搜到「人脸分组」并一键安装（版本 pinned 到具体 commit）。
 
