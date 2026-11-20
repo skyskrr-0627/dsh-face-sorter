@@ -17,6 +17,17 @@
 5. **聚类**：以余弦相似度阈值（默认 0.42）贪心聚类，质量高的脸先当种子，同一人的脸吸附上去。
 6. **出报告**：每个组给出代表图、成员缩略图、相似度；导出时可把每组复制进独立文件夹。
 
+## 第一次使用：准备运行环境
+
+插件只管界面与调度，真正的推理靠本机 python。首次打开面板时，如果缺少运行环境，顶部会出现「运行环境还没准备好」的卡片，点 **准备运行环境** 即可全自动完成：
+
+1. 在 `~/.dsh-face-sorter/.venv` 建虚拟环境（有 uv 用 uv 取 python 3.11；没有则用系统 python 3.10+）。
+2. 安装 `onnxruntime`、`numpy`、`opencv-python-headless`、`pillow`、`pillow-heif`、`rawpy`。默认走官方 PyPI，失败自动退到 aliyun 镜像。
+3. 从 ModelScope 下载 `det_10g.onnx` 与 `w600k_r50.onnx`（约 190MB，带百分比进度）。
+4. 用 onnxruntime 实际加载两个模型做校验，通过后才报告就绪。
+
+过程可取消；已完成的步骤不会重做（再次点击是秒级幂等检查）。运行环境处于 `~/.dsh-face-sorter`，与插件安装目录分离，升级插件不会丢。历史上放在工作区 `Documents/deepseek-harness/default-workspace/face-sorter` 的环境会被自动沿用。
+
 ## 面板怎么用
 
 - 左侧栏点「人脸分组」进入面板。

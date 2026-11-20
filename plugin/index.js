@@ -15,12 +15,24 @@ import { copyFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/pro
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  cancelPrepare,
+  inspectRuntime,
+  modelsReady,
+  prepareRuntime,
+  prepareStatus,
+  resetRuntime,
+  runtimePaths,
+} from './bootstrap.js'
 
 const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url))
-// The plugin itself is installed into the DSH profile, but the heavy runtime
-// (venv, models, job output) lives in the workspace so it survives reinstalls.
+// A published bundle must work for any user, so the heavy runtime (venv,
+// models, job output) lives in a writable home directory. Existing setups that
+// prepared the workspace path keep using it.
+const HOME_DIR = path.join(os.homedir(), '.dsh-face-sorter')
+const LEGACY_DIR = path.join(os.homedir(), 'Documents', 'deepseek-harness', 'default-workspace', 'face-sorter')
 const BASE_DIR = process.env.FACE_SORTER_HOME
-  || path.join(os.homedir(), 'Documents', 'deepseek-harness', 'default-workspace', 'face-sorter')
+  || (existsSync(path.join(LEGACY_DIR, '.venv', 'bin', 'python')) && !existsSync(HOME_DIR) ? LEGACY_DIR : HOME_DIR)
 const SCRIPT_PATH = path.join(PLUGIN_DIR, 'python', 'worker.py')
 const DATA_DIR = path.join(BASE_DIR, 'data')
 const RUNS_DIR = path.join(DATA_DIR, 'runs')
@@ -90,6 +102,19 @@ function stamp() {
   const d = new Date()
   const p = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+}
+
+/**
+ * Fail early with actionable text: a bundle installed from the registry has no
+ * venv or weights until the panel's one-click preparation ran.
+ */
+async function assertRuntime(settings) {
+  if (!existsSync(settings.pythonPath)) {
+    throw new Error(`运行环境还没准备好（缺少 ${settings.pythonPath}）。打开「人脸分组」面板，点「准备运行环境」会自动安装依赖并下载模型。`)
+  }
+  if (!(await modelsReady(settings.modelsDir))) {
+    throw new Error(`人脸模型还没下载完（${settings.modelsDir}）。打开「人脸分组」面板，点「准备运行环境」。`)
+  }
 }
 
 // --------------------------------------------------------------------------- //
@@ -236,12 +261,7 @@ async function startJob({ root, threshold, detThreshold }, logger) {
     throw new Error(`文件夹不存在：${resolved}`)
   }
   if (!info.isDirectory()) throw new Error(`不是文件夹：${resolved}`)
-  if (!existsSync(settings.pythonPath)) {
-    throw new Error(`找不到 python 运行时：${settings.pythonPath}（先运行安装脚本 setup.sh）`)
-  }
-  if (!existsSync(path.join(settings.modelsDir, 'det_10g.onnx'))) {
-    throw new Error(`找不到模型：${path.join(settings.modelsDir, 'det_10g.onnx')}（先运行安装脚本 setup.sh）`)
-  }
+  await assertRuntime(settings)
 
   const id = `${stamp()}-${randomUUID().slice(0, 6)}`
   const outDir = path.join(RUNS_DIR, id)
@@ -319,12 +339,7 @@ async function startJob({ root, threshold, detThreshold }, logger) {
 
 async function startMatch({ session, refId, threshold, detThreshold }, logger) {
   const settings = await readSettings()
-  if (!existsSync(settings.pythonPath)) {
-    throw new Error(`找不到 python 运行时：${settings.pythonPath}（先运行安装脚本 setup.sh）`)
-  }
-  if (!existsSync(path.join(settings.modelsDir, 'det_10g.onnx'))) {
-    throw new Error(`找不到模型：${path.join(settings.modelsDir, 'det_10g.onnx')}（先运行安装脚本 setup.sh）`)
-  }
+  await assertRuntime(settings)
   if (!/^[a-zA-Z0-9_-]{6,64}$/.test(String(session || ''))) throw new Error('会话标识无效')
   const queryDir = path.join(UPLOAD_DIR, session)
   let staged = []
@@ -728,7 +743,7 @@ export function apply(ctx) {
             },
             ready: {
               python: existsSync(settings.pythonPath),
-              models: existsSync(path.join(settings.modelsDir, 'det_10g.onnx')),
+              models: await modelsReady(settings.modelsDir),
             },
             script: SCRIPT_PATH,
             baseDir: BASE_DIR,
@@ -737,6 +752,53 @@ export function apply(ctx) {
         },
       }),
     'face-sorter: state route',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.connection.fetch.register({
+        path: '/api/face-sorter/runtime',
+        methods: ['GET'],
+        requestBody: 'buffered',
+        fetch: async () => json({ ok: true, ...(await inspectRuntime(BASE_DIR)) }),
+      }),
+    'face-sorter: runtime route',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.connection.fetch.register({
+        path: '/api/face-sorter/prepare',
+        methods: ['POST'],
+        requestBody: 'buffered',
+        fetch: async (request) => {
+          let body = {}
+          try {
+            body = await request.json()
+          } catch {
+            body = {}
+          }
+          const action = String(body?.action || 'start')
+          try {
+            if (action === 'cancel') {
+              const cancelled = cancelPrepare()
+              return json({ ok: true, cancelled, status: prepareStatus() })
+            }
+            if (action === 'reset') {
+              const runtime = await resetRuntime(BASE_DIR)
+              return json({ ok: true, runtime })
+            }
+            const started = await prepareRuntime(BASE_DIR, {
+              modelBase: body?.modelBase,
+              pipIndex: body?.pipIndex,
+            })
+            return json({ ok: true, started: started.started, already: Boolean(started.already), status: prepareStatus() })
+          } catch (error) {
+            return json({ ok: false, error: String(error?.message || error) }, 400)
+          }
+        },
+      }),
+    'face-sorter: prepare route',
   )
 
   ctx.effect(

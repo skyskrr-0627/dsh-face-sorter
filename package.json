@@ -1,0 +1,53 @@
+{
+  "name": "dsh-face-sorter",
+  "version": "0.2.0",
+  "description": "DSH 批量图片人脸分组插件：按人归类、以图找人、支持 29 种相机 RAW · Face grouping and face search for DeepSeek Harness",
+  "type": "module",
+  "main": "./plugin/index.js",
+  "exports": {
+    ".": "./plugin/index.js",
+    "./client": "./plugin/client.js",
+    "./package.json": "./package.json",
+    "./icon": "./plugin/icon.svg",
+    "./locale/*.json": "./plugin/locale/*.json"
+  },
+  "files": [
+    "plugin",
+    "setup.sh",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./plugin/cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.2-rc.1 <0.3.0-0"
+  },
+  "icon": "./plugin/icon.svg",
+  "keywords": [
+    "dsh-plugin",
+    "dsh-bundle",
+    "face-recognition",
+    "insightface",
+    "onnxruntime",
+    "photo-organizer",
+    "raw"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/skyskrr-0627/dsh-face-sorter.git"
+  }
+}

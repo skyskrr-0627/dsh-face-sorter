@@ -16,38 +16,50 @@
 ## 结构
 
 ```
-setup.sh              建 venv、装依赖、下模型（幂等）
+package.json          npm 包清单，指向 plugin/（供插件页安装码解析）
+setup.sh              手动预建 venv、装依赖、下模型（幂等）
 plugin/               DSH 插件本体（host 路由 + Web 面板 + python worker）
   index.js            host：任务生命周期、重聚类、缩略图、导出、两个 agent 工具
+  bootstrap.js        运行环境自举：venv / 依赖 / 模型，带进度与取消
   client.js           Web 面板（无构建，原生 ESM 客户端模块）
   python/worker.py    推理：SCRFD 检测 + ArcFace 识别 + 聚类（onnxruntime）
   docs/DETAIL.md      面板与工具的详细说明
-models/buffalo_l/     det_10g.onnx + w600k_r50.onnx（不入库，由 setup.sh 下载）
 ```
+
+运行时（venv、模型、扫描结果）默认在 `~/.dsh-face-sorter`；历史上放在工作区
+`Documents/deepseek-harness/default-workspace/face-sorter` 的环境会被自动沿用。
 
 ## 安装
 
-需要 macOS / Linux，python 3.10+，[uv](https://github.com/astral-sh/uv)。
+需要 macOS / Linux。python 依赖和模型由插件自己准备，不需要预先配置环境。
+
+**方式一：插件页填安装码（推荐）**
+
+在 DSH 侧栏「插件」页的安装框里填：
+
+```
+github:skyskrr-0627/dsh-face-sorter
+```
+
+装完打开「人脸分组」面板，点一次 **准备运行环境**：它会在 `~/.dsh-face-sorter` 建虚拟环境、装 `onnxruntime`/`opencv`/`rawpy` 等依赖，并从 ModelScope 下载约 190MB 的 buffalo_l 模型（`det_10g.onnx`、`w600k_r50.onnx`）。有 uv 时用 uv（自动取 python 3.11），没有则退回系统 python 3.10+。
+
+**方式二：本地检出（改代码时用）**
 
 ```bash
 git clone https://github.com/skyskrr-0627/dsh-face-sorter.git
 cd dsh-face-sorter
-./setup.sh          # 约 300MB：onnxruntime + opencv + rawpy + buffalo_l 模型
+./setup.sh          # 可选：提前建好 venv 与模型，等价于面板里的按钮
 ```
 
-模型从 ModelScope 拉取（GitHub release 在国内经常连不上）：
+然后把 `plugin/` 目录通过 `plugin_manager install_bundle`（target = 该目录绝对路径）装进 profile。软链形式改动即生效，重启 DSH 后可见。
+
+模型优先从 ModelScope 拉取（GitHub release 在国内经常连不上）：
 
 ```
 https://modelscope.cn/models/deepghs/insightface/resolve/master/buffalo_l/{det_10g,w600k_r50}.onnx
 ```
 
-然后在 DSH 里安装插件（`plugin/` 目录，支持软链）：
-
-```bash
-# 在 DSH 里：plugin_manager install_bundle，target = 本仓库 plugin/ 的绝对路径
-```
-
-重启 DSH，左侧栏出现「人脸分组」。
+可用环境变量覆盖：`FACE_SORTER_HOME`（运行时目录）、`FACE_SORTER_PIP_INDEX`（pip 索引，默认官方，失败自动退到 aliyun 镜像）、`FACE_SORTER_MODEL_BASE`（模型源）。
 
 ## 用法
 

@@ -164,6 +164,19 @@ window.__ModuleLoader__.load({
 .fs-list code { font-size: 11px; color: var(--dsw-alias-label-tertiary); }
 .fs-err { font-size: 12px; color: var(--dsw-alias-state-error-primary); white-space: pre-wrap; }
 .fs-note { font-size: 12px; color: var(--dsw-alias-state-success-primary); }
+.fs-setup { border-color: var(--dsw-alias-state-warn-primary); }
+.fs-setup-title { font-size: 13px; font-weight: 600; color: var(--dsw-alias-state-warn-primary); }
+.fs-setup-log {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-tertiary);
+  background: var(--dsw-alias-bg-layer-3);
+  border-radius: 6px;
+  padding: 6px 8px;
+  max-height: 96px;
+  overflow: auto;
+}
 .fs-slider { width: 160px; accent-color: var(--dsw-alias-brand-primary); }
 .fs-history { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
 .fs-history button {
@@ -529,6 +542,125 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** One-click first-run setup: venv + python deps + buffalo_l weights. */
+    function RuntimeSetup({ onReady }) {
+      const [runtime, setRuntime] = useState(null)
+      const [error, setError] = useState('')
+      const [busy, setBusy] = useState(false)
+      const timerRef = useRef(null)
+
+      const stopPolling = useCallback(() => {
+        if (timerRef.current) {
+          clearInterval(timerRef.current)
+          timerRef.current = null
+        }
+      }, [])
+
+      const load = useCallback(async () => {
+        try {
+          const data = await api('/runtime')
+          setRuntime(data)
+          if (data.ready) {
+            stopPolling()
+            setBusy(false)
+            onReady?.()
+          }
+          if (data.phase && data.phase !== 'running') setBusy(false)
+          return data
+        } catch (err) {
+          setError(String(err.message || err))
+          stopPolling()
+          setBusy(false)
+          return null
+        }
+      }, [onReady, stopPolling])
+
+      const startPolling = useCallback(() => {
+        stopPolling()
+        timerRef.current = setInterval(load, 900)
+      }, [load, stopPolling])
+
+      useEffect(() => {
+        load()
+        return stopPolling
+      }, [load, stopPolling])
+
+      const prepare = useCallback(async () => {
+        setError('')
+        setBusy(true)
+        try {
+          await api('/prepare', { action: 'start' })
+          await load()
+          startPolling()
+        } catch (err) {
+          setBusy(false)
+          setError(String(err.message || err))
+        }
+      }, [load, startPolling])
+
+      const cancel = useCallback(async () => {
+        try {
+          await api('/prepare', { action: 'cancel' })
+        } catch (err) {
+          setError(String(err.message || err))
+        }
+      }, [])
+
+      if (!runtime || runtime.ready) return null
+      const progress = runtime.progress || {}
+      const running = progress.phase === 'running' || busy
+      const percent = progress.percent || 0
+      const lines = progress.log || []
+
+      return h(
+        'div',
+        { className: 'fs-card fs-setup' },
+        h('div', { className: 'fs-setup-title' }, '运行环境还没准备好'),
+        h(
+          'div',
+          { className: 'fs-sub' },
+          `首次使用需要安装 python 依赖并下载约 190MB 人脸模型，全自动，预计 1–3 分钟。安装位置：${runtime.baseDir}`,
+        ),
+        h(
+          'div',
+          { className: 'fs-row' },
+          h(
+            'button',
+            { className: 'fs-btn fs-btn-primary', disabled: running, onClick: prepare },
+            running ? '准备中…' : '准备运行环境',
+          ),
+          running ? h('button', { className: 'fs-btn', onClick: cancel }, '取消') : null,
+          h(
+            'span',
+            { className: 'fs-pill ' + (runtime.python ? 'fs-pill-ok' : 'fs-pill-bad') },
+            runtime.python ? `python ${runtime.python}` : 'python 缺失',
+          ),
+          h(
+            'span',
+            { className: 'fs-pill ' + (runtime.models?.ok ? 'fs-pill-ok' : 'fs-pill-bad') },
+            runtime.models?.ok ? '模型就绪' : '模型未下载',
+          ),
+        ),
+        running || percent
+          ? h(
+            'div',
+            { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+            h('div', { className: 'fs-bar' }, h('div', { className: 'fs-bar-fill', style: { width: percent + '%' } })),
+            h('div', { className: 'fs-group-meta' }, `${percent}% · ${progress.message || '准备中'}`),
+            lines.length
+              ? h(
+                'div',
+                { className: 'fs-setup-log' },
+                ...lines.slice(-6).map((line, index) => h('div', { key: index }, line)),
+              )
+              : null,
+          )
+          : null,
+        progress.error ? h('div', { className: 'fs-err' }, progress.error) : null,
+        error ? h('div', { className: 'fs-err' }, error) : null,
+      )
+    }
+
     function Panel() {
       const [state, setState] = useState(null)
       const [root, setRoot] = useState('')
@@ -709,6 +841,8 @@ window.__ModuleLoader__.load({
             state?.baseDir ? h('span', { className: 'fs-pill' }, state.baseDir) : null,
           ),
         ),
+
+        h(RuntimeSetup, { onReady: refreshState }),
 
         h(
           'div',
