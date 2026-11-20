@@ -42,7 +42,7 @@ market/index.json     插件市场索引（format 1），供 Discover 添加索�
 github:skyskrr-0627/dsh-face-sorter
 ```
 
-首次安装要 clone 仓库，约 3–5 分钟。装完打开「人脸分组」面板，点一次 **准备运行环境**：它会在 `~/.dsh-face-sorter` 建虚拟环境、装 `onnxruntime`/`opencv`/`rawpy` 等依赖，并从 ModelScope 下载约 190MB 的 buffalo_l 模型（`det_10g.onnx`、`w600k_r50.onnx`）。有 uv 时用 uv（自动取 python 3.11），没有则退回系统 python 3.10+。
+首次安装要 clone 仓库，约 3–5 分钟。装完打开「人脸分组」面板，点一次 **准备运行环境**：它会在 `~/.dsh-face-sorter` 建虚拟环境、装 `onnxruntime`/`opencv`/`rawpy` 等依赖，并从 ModelScope 下载约 190MB 的 buffalo_l 模型（`det_10g.onnx`、`w600k_r50.onnx`）。有本机 python 3.10+ 就直接复用（不额外下载解释器）；没有才让 uv 下载 3.11（约 26MB）。依赖默认走 aliyun 镜像，失败再回官方 PyPI。
 
 **在插件市场里看到它**
 
@@ -61,6 +61,17 @@ https://gcore.jsdelivr.net/gh/skyskrr-0627/dsh-face-sorter@main/market/index.jso
 原始的 `raw.githubusercontent.com` 直连在国内多数网络不通，所以上面给的是加速地址。
 
 在 Discover 里「Add index source」填上面任一地址，就能搜到「人脸分组」并一键安装（版本 pinned 到具体 commit）。
+
+**方式三：拷给别人的离线包**
+
+`scripts/make-local-bundle.sh` 会打出 `dist/dsh-face-sorter-<版本>-local.zip`（约 176MB）：里面是插件本体 + 预置好的两个模型 + 一个 `install.sh`。对方解压后：
+
+```bash
+cd dsh-face-sorter-0.2.1-local
+./install.sh          # 把模型放进 ~/.dsh-face-sorter，省掉 190MB 下载
+```
+
+然后把该目录装成插件（插件页填这个目录的绝对路径，或让 agent 调 `install_bundle`），重启 DSH，打开面板点「准备运行环境」——此时只装约 60MB python 依赖。
 
 **方式二：本地检出（改代码时用）**
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-face-sorter",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DSH 批量图片人脸分组插件：按人归类、以图找人、支持 29 种相机 RAW · Face grouping and face search for DeepSeek Harness",
   "type": "module",
   "main": "./plugin/index.js",

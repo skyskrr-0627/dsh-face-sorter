@@ -21,8 +21,8 @@
 
 插件只管界面与调度，真正的推理靠本机 python。首次打开面板时，如果缺少运行环境，顶部会出现「运行环境还没准备好」的卡片，点 **准备运行环境** 即可全自动完成：
 
-1. 在 `~/.dsh-face-sorter/.venv` 建虚拟环境（有 uv 用 uv 取 python 3.11；没有则用系统 python 3.10+）。
-2. 安装 `onnxruntime`、`numpy`、`opencv-python-headless`、`pillow`、`pillow-heif`、`rawpy`。默认走官方 PyPI，失败自动退到 aliyun 镜像。
+1. 在 `~/.dsh-face-sorter/.venv` 建虚拟环境。优先复用本机已有的 python 3.10+（用 uv 时不触发额外下载）；本机没有才让 uv 下载 python 3.11（约 26MB）。
+2. 安装 `onnxruntime`、`numpy`、`opencv-python-headless`、`pillow`、`pillow-heif`、`rawpy`（约 60MB）。默认先走 aliyun 镜像，失败再回官方 PyPI。
 3. 从 ModelScope 下载 `det_10g.onnx` 与 `w600k_r50.onnx`（约 190MB，带百分比进度）。
 4. 用 onnxruntime 实际加载两个模型做校验，通过后才报告就绪。
 

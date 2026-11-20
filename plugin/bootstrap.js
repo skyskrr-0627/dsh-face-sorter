@@ -231,21 +231,28 @@ export async function prepareRuntime(baseDir, options = {}) {
       // 1. python + venv ---------------------------------------------------- //
       setStep('venv', 4, '准备 python 运行时')
       const uv = await findOnPath(['uv'])
-      const systemPython = await findOnPath(['python3.12', 'python3.11', 'python3.10', 'python3'])
+      const systemPython = (await findOnPath(['python3.12', 'python3.11', 'python3.10'])) || (await findOnPath(['python3']))
       const existing = await pythonVersion(pythonPathOf(paths))
       if (!existing) {
-        if (uv) {
-          note('用 uv 创建虚拟环境（python 3.11）')
+        const ver = systemPython ? await pythonVersion(systemPython) : null
+        const usable = !!ver && ver.split('.')[0] === '3' && Number(ver.split('.')[1]) >= 10
+        if (usable) {
+          // 复用本机 python：uv 不会再下载 26MB 的独立解释器（国内访问 GitHub 很慢）
+          if (uv) {
+            note(`用 uv 创建虚拟环境（复用本机 python ${ver}）`)
+            const res = await run(uv, ['venv', '--python', systemPython, paths.venvDir], { onLine: note })
+            if (res.code !== 0) throw new Error(`uv venv 失败：${res.err.trim().slice(-400) || res.code}`)
+          } else {
+            note(`用 ${systemPython}（${ver}）创建虚拟环境`)
+            const res = await run(systemPython, ['-m', 'venv', paths.venvDir], { onLine: note })
+            if (res.code !== 0) throw new Error(`python -m venv 失败：${res.err.trim().slice(-400) || res.code}`)
+          }
+        } else if (uv) {
+          note(`本机 python 是 ${ver || '未知版本'}（需要 3.10+），让 uv 下载 python 3.11（约 26MB，国内可能较慢）`)
           const res = await run(uv, ['venv', '--python', '3.11', paths.venvDir], { onLine: note })
           if (res.code !== 0) throw new Error(`uv venv 失败：${res.err.trim().slice(-400) || res.code}`)
         } else if (systemPython) {
-          const ver = await pythonVersion(systemPython)
-          if (!ver || Number(ver.split('.')[1]) < 10 || Number(ver.split('.')[0]) !== 3) {
-            throw new Error(`系统 python 是 ${ver || '未知版本'}，需要 3.10+；请先安装 uv（https://astral.sh/uv）后重试`)
-          }
-          note(`用 ${systemPython}（${ver}）创建虚拟环境`)
-          const res = await run(systemPython, ['-m', 'venv', paths.venvDir], { onLine: note })
-          if (res.code !== 0) throw new Error(`python -m venv 失败：${res.err.trim().slice(-400) || res.code}`)
+          throw new Error(`系统 python 是 ${ver || '未知版本'}，需要 3.10+；请先安装 uv（https://astral.sh/uv）后重试`)
         } else {
           throw new Error('找不到 python3.10+ 或 uv。请先安装 uv：https://astral.sh/uv')
         }
@@ -258,7 +265,10 @@ export async function prepareRuntime(baseDir, options = {}) {
       // 2. dependencies ------------------------------------------------------ //
       const probe = await run(python, ['-c', 'import onnxruntime, cv2, numpy, PIL'], { timeoutMs: 60000 })
       if (probe.code !== 0) {
-        const indexes = [pipIndex, 'https://mirrors.aliyun.com/pypi/simple']
+        const MIRROR = 'https://mirrors.aliyun.com/pypi/simple'
+        const explicit = Boolean(options.pipIndex || process.env.FACE_SORTER_PIP_INDEX)
+        // 默认先走国内镜像：官方 PyPI 在部分网络下只有 20KB/s，等到超时才发现太浪费。
+        const indexes = explicit ? [pipIndex, MIRROR] : [MIRROR, DEFAULT_PIP_INDEX]
         let installed = false
         let lastError = ''
         for (const index of [...new Set(indexes)]) {
@@ -284,7 +294,8 @@ export async function prepareRuntime(baseDir, options = {}) {
       }
 
       // 3. models ------------------------------------------------------------ //
-      setStep('models', 45, '下载人脸模型（约 190MB）')
+      const preinstalled = (await Promise.all(MODEL_FILES.map((name) => modelBytes(paths.modelsDir, name)))).every((bytes) => bytes > 1e6)
+      setStep('models', 45, preinstalled ? '检查人脸模型（已预置，无需下载）' : '下载人脸模型（约 190MB）')
       await mkdir(paths.modelsDir, { recursive: true })
       let downloaded = 0
       const totalBytes = MODEL_FILES.reduce((sum, name) => sum + (MODEL_SIZES[name] || 0), 0)
