@@ -503,11 +503,32 @@ function uniqueName(taken, name) {
   return `${stem}_${randomUUID().slice(0, 6)}${ext}`
 }
 
-async function exportGroups(job, groupIds, destRoot) {
+async function exportGroups(job, groupIds, destRoot, rootFix) {
   const result = job.result
   if (!result?.groups) throw new Error('这次任务还没有结果')
   const selected = result.groups.filter((group) => !groupIds || groupIds.includes(group.id))
   if (!selected.length) throw new Error('没有选中任何分组')
+  // 结果里存的是扫描当时的绝对路径。源文件夹被改名、挪进新建父目录或者盘换了挂载点
+  // 之后这些路径就全失效了，所以这里允许用 rootFix 指定"现在的源文件夹"，
+  // 并按三种可能去找文件：记录的原目录、用户指定的目录、指定目录下同名子文件夹。
+  const recordedRoot = job.root
+  const remapRoot =
+    typeof rootFix === 'string' && rootFix.trim()
+      ? path.resolve(rootFix.trim().replace(/^~(?=$|\/)/, process.env.HOME || '~'))
+      : ''
+  const sourceRoots = remapRoot
+    ? [recordedRoot, remapRoot, path.join(remapRoot, path.basename(recordedRoot))].filter((dir) =>
+        existsSync(dir),
+      )
+    : [recordedRoot]
+  const sourceRoot = sourceRoots[0] || recordedRoot
+  const findSource = (rel) => {
+    for (const dir of sourceRoots) {
+      const candidate = path.join(dir, rel)
+      if (existsSync(candidate)) return candidate
+    }
+    return path.join(sourceRoot, rel)
+  }
   const dest = path.resolve(
     (destRoot || path.join(job.outDir, 'export')).replace(/^~(?=$|\/)/, process.env.HOME || '~'),
   )
@@ -524,14 +545,22 @@ async function exportGroups(job, groupIds, destRoot) {
       try {
         const name = uniqueName(names, path.basename(rel))
         names.add(name)
-        await copyFile(path.join(job.root, rel), path.join(folder, name))
+        await copyFile(findSource(rel), path.join(folder, name))
         copied.push({ group: group.id, file: rel, to: path.join(folder, name) })
       } catch (error) {
         errors.push({ group: group.id, file: rel, error: String(error?.message || error) })
       }
     }
   }
-  return { dest, copied: copied.length, errors }
+  return {
+    dest,
+    copied: copied.length,
+    errors,
+    sourceRoot,
+    recordedRoot,
+    remapped: sourceRoot !== recordedRoot,
+    sourceMissing: !existsSync(recordedRoot),
+  }
 }
 
 // --------------------------------------------------------------------------- //
@@ -698,7 +727,12 @@ function findToolDefinition(ctx) {
       if (args?.exportTo && result.groups.length) {
         const exported = await exportGroups(job, null, args.exportTo)
         lines.push(`已复制 ${exported.copied} 个文件到 ${exported.dest}`)
-        if (exported.errors.length) lines.push(`复制失败 ${exported.errors.length} 个`)
+        if (exported.errors.length) {
+          lines.push(
+            `复制失败 ${exported.errors.length} 个（例：${String(exported.errors[0].error).split('\n')[0]}）`,
+          )
+          if (exported.sourceMissing) lines.push(`源文件夹已不存在：${exported.recordedRoot}`)
+        }
       }
       lines.push(`面板「人脸分组」可看缩略图；报告：${path.join(job.outDir, 'report.md')}`)
       return lines.join('\n')
@@ -1014,7 +1048,20 @@ export function apply(ctx) {
             if (!job) return json({ ok: false, error: 'not found' }, 404)
             if (job.status === 'running') return json({ ok: false, error: '任务还在运行' }, 409)
             const groups = Array.isArray(body?.groups) && body.groups.length ? body.groups : null
-            const result = await exportGroups(job, groups, body?.dest)
+            // 源文件夹不在了就先别拷（否则只会得到一堆 ENOENT），让面板去问用户
+            // 现在这个文件夹在哪。前端看到 needRoot 会弹目录选择框再带 rootFix 重试。
+            if (!existsSync(job.root) && !body?.rootFix) {
+              return json({
+                ok: true,
+                needRoot: true,
+                root: job.root,
+                dest: '',
+                copied: 0,
+                errors: [],
+                sourceMissing: true,
+              })
+            }
+            const result = await exportGroups(job, groups, body?.dest, body?.rootFix)
             return json({ ok: true, ...result })
           } catch (error) {
             return json({ ok: false, error: String(error?.message || error) }, 400)

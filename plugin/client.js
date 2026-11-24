@@ -862,8 +862,30 @@ window.__ModuleLoader__.load({
           setError('')
           setNotice('')
           try {
-            const data = await api('/export', { id: jobId, groups, dest: dest.trim() || undefined })
-            setNotice(`已复制 ${data.copied} 个文件到 ${data.dest}${data.errors?.length ? `（${data.errors.length} 个失败）` : ''}`)
+            const payload = { id: jobId, groups, dest: dest.trim() || undefined }
+            let data = await api('/export', payload)
+            // 扫描后源文件夹被改名/挪走，结果里记的绝对路径就全失效了。问用户它现在在哪，
+            // 然后带 rootFix 重试一次——不用重跑整轮分析。
+            if (data.needRoot) {
+              const picked = await api('/pick-folder', {
+                start: data.root,
+                prompt: '原照片文件夹已不存在，请选择它现在的文件夹',
+              })
+              if (!picked.path) {
+                setNotice('已取消导出（源文件夹找不到）')
+                return
+              }
+              data = await api('/export', { ...payload, rootFix: picked.path })
+            }
+            const failed = data.errors?.length || 0
+            const firstError = data.errors?.[0]?.error
+            setNotice(
+              `已复制 ${data.copied} 个文件到 ${data.dest}` +
+                (failed
+                  ? `（${failed} 个失败${firstError ? '：' + String(firstError).split('\n')[0].slice(0, 120) : ''}）`
+                  : '') +
+                (data.remapped ? ` · 源目录改用 ${data.sourceRoot}` : ''),
+            )
           } catch (err) {
             setError(String(err.message || err))
           } finally {
