@@ -10,7 +10,7 @@
  */
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { copyFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -119,6 +119,114 @@ function stamp() {
   const d = new Date()
   const p = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+}
+
+// --------------------------------------------------------------------------- //
+// source folder recovery
+// --------------------------------------------------------------------------- //
+// A run remembers absolute paths from the moment it scanned. Rename the folder,
+// drag it into a new parent, or plug the card in under another mount point and
+// every recorded path dies with ENOENT. These helpers find the folder again by
+// name and prove the match against a sample of the recorded relative paths.
+
+const SKIP_DIRS = new Set([
+  '$RECYCLE.BIN',
+  'System Volume Information',
+  '.Spotlight-V100',
+  '.Trashes',
+  '.fseventsd',
+  '.git',
+  'node_modules',
+  '.venv',
+  '__pycache__',
+])
+
+function sampleRelPaths(result, limit = 3) {
+  const out = []
+  for (const group of result?.groups || []) {
+    for (const rel of group.files || []) {
+      if (!out.includes(rel)) out.push(rel)
+      if (out.length >= limit) return out
+    }
+  }
+  return out
+}
+
+/** A candidate root is credible when the recorded photos are actually in it. */
+function looksLikeSource(dir, result) {
+  if (!dir || !existsSync(dir)) return false
+  const sample = sampleRelPaths(result)
+  if (!sample.length) return true
+  return sample.some((rel) => existsSync(path.join(dir, rel)))
+}
+
+/**
+ * Breadth-first search for a directory with the same basename as `recordedRoot`,
+ * looking beside it first and then two levels down every mounted volume. Bounded
+ * because a full sweep of an external drive is not something to do on a click.
+ */
+function locateSource(recordedRoot, result) {
+  const base = path.basename(recordedRoot || '')
+  if (!base) return ''
+  const started = Date.now()
+  // 先铺 /Volumes 下的挂载点（深度 3），再补记录路径的父目录，避免同一个目录
+  // 被浅深度那一路先去重掉、导致深一层的同名文件夹永远排不进队列。
+  const queue = []
+  try {
+    for (const name of readdirSync('/Volumes')) {
+      queue.push({ dir: path.join('/Volumes', name), level: 0, depth: 3 })
+    }
+  } catch {
+    /* no /Volumes on this platform */
+  }
+  queue.push({ dir: path.dirname(recordedRoot), level: 1, depth: 2 })
+  const seen = new Set()
+  let visited = 0
+  while (queue.length) {
+    const { dir, level, depth } = queue.shift()
+    if (!dir || seen.has(dir)) continue
+    seen.add(dir)
+    if (++visited > 3000 || Date.now() - started > 2500) break
+    if (path.basename(dir) === base && looksLikeSource(dir, result)) return dir
+    if (level >= depth) continue
+    let entries = []
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      if (SKIP_DIRS.has(entry.name) || entry.name.endsWith('.app')) continue
+      queue.push({ dir: path.join(dir, entry.name), level: level + 1, depth })
+    }
+  }
+  return ''
+}
+
+/** Remember the repaired root on the run itself, so this is a one-time fix. */
+async function persistRoot(job, newRoot) {
+  const metaPath = path.join(job.outDir, 'meta.json')
+  const meta = (await readJson(metaPath, null)) || {}
+  if (!meta.rootOriginal) meta.rootOriginal = job.root
+  meta.root = newRoot
+  await writeJson(metaPath, meta)
+  job.rootOriginal = meta.rootOriginal
+  job.root = newRoot
+  return meta
+}
+
+/**
+ * Make sure the run has a usable source root before anything reads files from
+ * it: the recorded one if it is still there, otherwise the best relocated match.
+ */
+async function ensureSource(job) {
+  const original = job.rootOriginal || job.root
+  if (existsSync(job.root)) return { root: job.root, original, fixed: false, missing: false }
+  const found = locateSource(original, job.result)
+  if (!found) return { root: job.root, original, fixed: false, missing: true }
+  await persistRoot(job, found)
+  return { root: found, original, fixed: true, missing: true }
 }
 
 /**
@@ -477,6 +585,7 @@ async function loadJob(id) {
   const job = {
     id,
     root: meta.root,
+    rootOriginal: meta.rootOriginal || meta.root,
     outDir,
     status: result ? (result.ok ? 'done' : 'error') : 'error',
     startedAt: meta.startedAt,
@@ -509,18 +618,19 @@ async function exportGroups(job, groupIds, destRoot, rootFix) {
   const selected = result.groups.filter((group) => !groupIds || groupIds.includes(group.id))
   if (!selected.length) throw new Error('没有选中任何分组')
   // 结果里存的是扫描当时的绝对路径。源文件夹被改名、挪进新建父目录或者盘换了挂载点
-  // 之后这些路径就全失效了，所以这里允许用 rootFix 指定"现在的源文件夹"，
-  // 并按三种可能去找文件：记录的原目录、用户指定的目录、指定目录下同名子文件夹。
-  const recordedRoot = job.root
+  // 之后这些路径就全失效了，所以依次尝试：当前有效的根、rootFix 指定的目录、
+  // 指定目录下的同名子目录、以及当初记录的原始目录。
+  const recordedRoot = job.rootOriginal || job.root
   const remapRoot =
     typeof rootFix === 'string' && rootFix.trim()
       ? path.resolve(rootFix.trim().replace(/^~(?=$|\/)/, process.env.HOME || '~'))
       : ''
-  const sourceRoots = remapRoot
-    ? [recordedRoot, remapRoot, path.join(remapRoot, path.basename(recordedRoot))].filter((dir) =>
-        existsSync(dir),
-      )
-    : [recordedRoot]
+  const sourceRoots = []
+  const candidates = [job.root, remapRoot, recordedRoot]
+  if (remapRoot) candidates.push(path.join(remapRoot, path.basename(recordedRoot)))
+  for (const dir of candidates) {
+    if (dir && existsSync(dir) && !sourceRoots.includes(dir)) sourceRoots.push(dir)
+  }
   const sourceRoot = sourceRoots[0] || recordedRoot
   const findSource = (rel) => {
     for (const dir of sourceRoots) {
@@ -965,10 +1075,63 @@ export function apply(ctx) {
           if (!job) return json({ ok: false, error: 'not found' }, 404)
           const result = job.result || (await readJson(path.join(job.outDir, 'result.json'), null))
           if (!result) return json({ ok: false, error: '还没有结果' }, 409)
-          return json({ ok: true, result: { ...result, id: job.id, status: job.status } })
+          const source = await ensureSource(job)
+          return json({
+            ok: true,
+            result: { ...result, id: job.id, status: job.status },
+            source: { root: source.root, original: source.original, missing: source.missing, autoFixed: source.fixed },
+          })
         },
       }),
     'face-sorter: result route',
+  )
+
+  ctx.effect(
+    () =>
+      ctx.connection.fetch.register({
+        path: '/api/face-sorter/fix-root',
+        methods: ['POST'],
+        requestBody: 'buffered',
+        fetch: async (request) => {
+          try {
+            const body = await request.json().catch(() => ({}))
+            const job = await loadJob(String(body?.id || ''))
+            if (!job) return json({ ok: false, error: 'not found' }, 404)
+            const original = job.rootOriginal || job.root
+            const wanted =
+              typeof body?.path === 'string' && body.path.trim()
+                ? path.resolve(body.path.trim().replace(/^~(?=$|\/)/, process.env.HOME || '~'))
+                : ''
+            if (wanted && !existsSync(wanted)) return json({ ok: false, error: `文件夹不存在：${wanted}` }, 400)
+            let found = ''
+            let how = ''
+            if (wanted) {
+              const nested = path.join(wanted, path.basename(original))
+              if (looksLikeSource(wanted, job.result)) {
+                found = wanted
+                how = 'manual'
+              } else if (looksLikeSource(nested, job.result)) {
+                found = nested
+                how = 'manual-nested'
+              } else {
+                found = wanted
+                how = 'manual-unverified'
+              }
+            } else {
+              found = locateSource(original, job.result)
+              how = 'auto'
+              if (!found) {
+                return json({ ok: false, error: '没找到同名文件夹，请手动选择它现在的位置' }, 404)
+              }
+            }
+            await persistRoot(job, found)
+            return json({ ok: true, root: found, original, how, verified: looksLikeSource(found, job.result) })
+          } catch (error) {
+            return json({ ok: false, error: String(error?.message || error) }, 400)
+          }
+        },
+      }),
+    'face-sorter: fix-root route',
   )
 
   ctx.effect(
@@ -1048,13 +1211,14 @@ export function apply(ctx) {
             if (!job) return json({ ok: false, error: 'not found' }, 404)
             if (job.status === 'running') return json({ ok: false, error: '任务还在运行' }, 409)
             const groups = Array.isArray(body?.groups) && body.groups.length ? body.groups : null
-            // 源文件夹不在了就先别拷（否则只会得到一堆 ENOENT），让面板去问用户
-            // 现在这个文件夹在哪。前端看到 needRoot 会弹目录选择框再带 rootFix 重试。
+            // 源文件夹不在了：先自己按名字找回来并记到这个运行上；实在找不到才让
+            // 面板去问用户（前端看到 needRoot 会弹目录选择框，再带 rootFix 重试）。
+            const source = await ensureSource(job)
             if (!existsSync(job.root) && !body?.rootFix) {
               return json({
                 ok: true,
                 needRoot: true,
-                root: job.root,
+                root: source.original,
                 dest: '',
                 copied: 0,
                 errors: [],
@@ -1062,7 +1226,7 @@ export function apply(ctx) {
               })
             }
             const result = await exportGroups(job, groups, body?.dest, body?.rootFix)
-            return json({ ok: true, ...result })
+            return json({ ok: true, ...result, autoFixed: source.fixed })
           } catch (error) {
             return json({ ok: false, error: String(error?.message || error) }, 400)
           }

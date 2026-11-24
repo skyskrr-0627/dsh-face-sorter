@@ -114,6 +114,7 @@ window.__ModuleLoader__.load({
 }
 .fs-pill-ok { color: var(--dsw-alias-state-success-primary); border-color: var(--dsw-alias-state-success-primary); }
 .fs-pill-bad { color: var(--dsw-alias-state-error-primary); border-color: var(--dsw-alias-state-error-primary); }
+.fs-hint { font-size: 12px; color: var(--dsw-alias-label-tertiary); }
 .fs-bar { height: 6px; border-radius: 999px; background: var(--dsw-alias-bg-layer-3); overflow: hidden; }
 .fs-bar-fill { height: 100%; background: var(--dsw-alias-brand-primary); transition: width 200ms linear; }
 .fs-stats { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--dsw-alias-label-secondary); }
@@ -711,6 +712,7 @@ window.__ModuleLoader__.load({
       const [jobId, setJobId] = useState(null)
       const [job, setJob] = useState(null)
       const [result, setResult] = useState(null)
+      const [source, setSource] = useState(null)
       const [activeGroup, setActiveGroup] = useState(null)
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
@@ -742,6 +744,7 @@ window.__ModuleLoader__.load({
         try {
           const data = await api(`/result?id=${encodeURIComponent(id)}`)
           setResult(data.result)
+          setSource(data.source || null)
           if (data.result?.threshold !== undefined) setThreshold(data.result.threshold)
         } catch (err) {
           setError(String(err.message || err))
@@ -836,6 +839,60 @@ window.__ModuleLoader__.load({
           setDestBusy(false)
         }
       }, [dest])
+
+      // 源文件夹被改名/挪走时，插件先自己按名字找回来（后端 ensureSource 已把它
+      // 记到这个运行上）；这里负责把结果说清楚，并给一个手动「换源」的出口。
+      const autoFixedRef = useRef('')
+      useEffect(() => {
+        if (!jobId || !source?.missing) return
+        const key = `${jobId}|${source.original}`
+        if (autoFixedRef.current === key) return
+        autoFixedRef.current = key
+        ;(async () => {
+          try {
+            const data = await api('/fix-root', { id: jobId })
+            setSource({ root: data.root, original: data.original, missing: !data.verified, autoFixed: true })
+            setNotice(`源文件夹被移动过，已自动定位到 ${data.root}`)
+          } catch {
+            setNotice(`源文件夹已不存在：${source.original}。点「换源」指定它现在的位置，不用重跑分析。`)
+          }
+        })()
+      }, [jobId, source])
+
+      const fixRoot = useCallback(async () => {
+        if (!jobId) return
+        setBusy(true)
+        setError('')
+        setNotice('')
+        try {
+          let data = null
+          try {
+            data = await api('/fix-root', { id: jobId })
+          } catch {
+            data = null
+          }
+          if (!data?.ok) {
+            const picked = await api('/pick-folder', {
+              start: (source?.root || source?.original || root.trim()) || undefined,
+              prompt: '选择这个运行现在对应的照片文件夹',
+            })
+            if (!picked.path) {
+              setNotice('已取消换源')
+              return
+            }
+            data = await api('/fix-root', { id: jobId, path: picked.path })
+          }
+          setSource({ root: data.root, original: data.original, missing: !data.verified, autoFixed: false })
+          setNotice(
+            `源文件夹已换成 ${data.root}` +
+              (data.verified ? '' : '（里面没找到这轮记录的照片，导出可能仍会失败）'),
+          )
+        } catch (err) {
+          setError(String(err.message || err))
+        } finally {
+          setBusy(false)
+        }
+      }, [jobId, source, root])
 
       const recluster = useCallback(
         async (value) => {
@@ -1023,6 +1080,23 @@ window.__ModuleLoader__.load({
                       `全部导出（${groups.length} 组）`,
                     ),
                     jobId ? h('span', { className: 'fs-pill' }, `运行 ${jobId}`) : null,
+                  )
+                : null,
+
+              source && (source.missing || source.root !== source.original)
+                ? h(
+                    'div',
+                    { className: 'fs-row fs-row-tight' },
+                    h('span', { className: 'fs-label' }, '源文件夹'),
+                    h(
+                      'span',
+                      { className: 'fs-pill' + (source.missing ? ' fs-pill-bad' : ' fs-pill-ok') },
+                      source.root,
+                    ),
+                    source.missing
+                      ? h('span', { className: 'fs-hint' }, `原路径已不存在：${source.original}`)
+                      : h('span', { className: 'fs-hint' }, '已按新位置读取（原路径已消失）'),
+                    h('button', { className: 'fs-btn', disabled: busy || pickBusy, onClick: fixRoot }, '换源'),
                   )
                 : null,
             )
