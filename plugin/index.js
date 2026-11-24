@@ -1035,9 +1035,18 @@ export function apply(ctx) {
         requestBody: 'buffered',
         fetch: async () => {
           const settings = await readSettings()
-          const startDir = settings.lastRoot || process.env.HOME || '/'
+          // `default location` must coerce to an alias, so a stale lastRoot (drive
+          // renamed, unmounted or folder deleted) kills the whole dialog with
+          // -1700 before it ever appears. Only pass a folder that still exists.
+          const startDir =
+            [settings.lastRoot, process.env.HOME, '/'].find(
+              (dir) => typeof dir === 'string' && dir.startsWith('/') && existsSync(dir),
+            ) || ''
           return await new Promise((resolve) => {
-            const script = `POSIX path of (choose folder with prompt "选择照片文件夹" default location (POSIX file "${startDir.replace(/"/g, '\\"')}"))`
+            const defaultLocation = startDir
+              ? ` default location (POSIX file "${startDir.replace(/"/g, '\\"')}")`
+              : ''
+            const script = `POSIX path of (choose folder with prompt "选择照片文件夹"${defaultLocation})`
             const child = spawn('osascript', ['-e', script])
             let out = ''
             let err = ''
@@ -1049,7 +1058,21 @@ export function apply(ctx) {
             })
             child.on('close', (code) => {
               if (code === 0) resolve(json({ ok: true, path: out.trim().replace(/\/$/, '') }))
-              else resolve(json({ ok: false, error: err.trim() || '已取消' }, 200))
+              else {
+                const message = err.trim() || ''
+                if (!message) resolve(json({ ok: false, error: '已取消' }, 200))
+                else if (message.includes('-1700'))
+                  resolve(
+                    json(
+                      {
+                        ok: false,
+                        error: '默认文件夹不存在（磁盘未挂载或已被移动），请重新选择照片文件夹',
+                      },
+                      200,
+                    ),
+                  )
+                else resolve(json({ ok: false, error: message }, 200))
+              }
             })
             child.on('error', () => resolve(json({ ok: false, error: '无法打开系统选择框' }, 200)))
           })
