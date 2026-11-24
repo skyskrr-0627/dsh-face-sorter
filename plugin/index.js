@@ -98,6 +98,23 @@ async function saveSettings(patch) {
   return next
 }
 
+/**
+ * An AppleScript folder picker's `default location` must coerce to an alias, so
+ * it has to be an existing directory — anything else (a folder the user is about
+ * to create, an unplugged drive) makes the whole dialog fail with -1700. Walk up
+ * to the nearest existing ancestor instead.
+ */
+function nearestExistingDir(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) return ''
+  let dir = path.resolve(raw.trim().replace(/^~(?=$|\/)/, process.env.HOME || '~'))
+  while (!existsSync(dir)) {
+    const parent = path.dirname(dir)
+    if (parent === dir) return ''
+    dir = parent
+  }
+  return dir
+}
+
 function stamp() {
   const d = new Date()
   const p = (n) => String(n).padStart(2, '0')
@@ -1033,20 +1050,28 @@ export function apply(ctx) {
         path: '/api/face-sorter/pick-folder',
         methods: ['POST'],
         requestBody: 'buffered',
-        fetch: async () => {
+        fetch: async (request) => {
+          const body = await request.json().catch(() => ({}))
           const settings = await readSettings()
+          const prompt =
+            String(body?.prompt || '').replace(/["\\\r\n]/g, '').trim().slice(0, 60) ||
+            '选择照片文件夹'
           // `default location` must coerce to an alias, so a stale lastRoot (drive
           // renamed, unmounted or folder deleted) kills the whole dialog with
-          // -1700 before it ever appears. Only pass a folder that still exists.
+          // -1700 before it ever appears. Only pass a folder that still exists;
+          // an explicit `start` (the folder field being edited) wins so the picker
+          // opens where the user is already pointed at.
           const startDir =
+            nearestExistingDir(body?.start) ||
             [settings.lastRoot, process.env.HOME, '/'].find(
               (dir) => typeof dir === 'string' && dir.startsWith('/') && existsSync(dir),
-            ) || ''
+            ) ||
+            ''
           return await new Promise((resolve) => {
             const defaultLocation = startDir
               ? ` default location (POSIX file "${startDir.replace(/"/g, '\\"')}")`
               : ''
-            const script = `POSIX path of (choose folder with prompt "选择照片文件夹"${defaultLocation})`
+            const script = `POSIX path of (choose folder with prompt "${prompt}"${defaultLocation})`
             const child = spawn('osascript', ['-e', script])
             let out = ''
             let err = ''

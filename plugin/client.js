@@ -81,7 +81,7 @@ window.__ModuleLoader__.load({
   outline: none;
 }
 .fs-input:focus { border-color: var(--dsw-alias-brand-primary); }
-.fs-input-sm { flex: 0 1 200px; }
+.fs-input-sm { flex: 1 1 240px; }
 .fs-btn {
   height: 32px;
   padding: 0 14px;
@@ -716,6 +716,7 @@ window.__ModuleLoader__.load({
       const [notice, setNotice] = useState('')
       const [busy, setBusy] = useState(false)
       const [pickBusy, setPickBusy] = useState(false)
+      const [destBusy, setDestBusy] = useState(false)
       const pollRef = useRef(null)
 
       const refreshState = useCallback(async () => {
@@ -806,7 +807,10 @@ window.__ModuleLoader__.load({
         setPickBusy(true)
         setError('')
         try {
-          const data = await api('/pick-folder', {})
+          const data = await api('/pick-folder', {
+            start: root.trim() || undefined,
+            prompt: '选择照片文件夹',
+          })
           if (data.path) setRoot(data.path)
           else if (data.error) setError(data.error)
         } catch (err) {
@@ -814,7 +818,24 @@ window.__ModuleLoader__.load({
         } finally {
           setPickBusy(false)
         }
-      }, [])
+      }, [root])
+
+      const pickDest = useCallback(async () => {
+        setDestBusy(true)
+        setError('')
+        try {
+          const data = await api('/pick-folder', {
+            start: dest.trim() || undefined,
+            prompt: '选择导出目录（每组会建一个子文件夹）',
+          })
+          if (data.path) setDest(data.path)
+          else if (data.error) setError(data.error)
+        } catch (err) {
+          setError(String(err.message || err))
+        } finally {
+          setDestBusy(false)
+        }
+      }, [dest])
 
       const recluster = useCallback(
         async (value) => {
@@ -969,6 +990,11 @@ window.__ModuleLoader__.load({
                       spellCheck: false,
                       onChange: (event) => setDest(event.target.value),
                     }),
+                    h(
+                      'button',
+                      { className: 'fs-btn', disabled: destBusy, onClick: pickDest },
+                      destBusy ? '选择中…' : '选择目录',
+                    ),
                     h(
                       'button',
                       { className: 'fs-btn', disabled: busy, onClick: () => doExport(null) },
