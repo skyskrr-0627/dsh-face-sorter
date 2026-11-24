@@ -138,6 +138,33 @@ window.__ModuleLoader__.load({
   display: block;
   background: var(--dsw-alias-bg-layer-3);
 }
+.fs-cover-btn {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+.fs-cover-btn:disabled { cursor: progress; }
+.fs-cover-hint {
+  position: absolute;
+  inset: auto 6px 6px 6px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--dsw-alias-label-primary-foreground);
+  background: var(--dsw-alias-bg-overlay);
+  opacity: 0;
+  transition: opacity 120ms ease;
+  pointer-events: none;
+}
+.fs-cover-btn:hover .fs-cover-hint,
+.fs-cover-btn:focus-visible .fs-cover-hint { opacity: 1; }
 .fs-group-body { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 2px; }
 .fs-group-id { font-size: 13px; font-weight: 600; }
 .fs-group-meta { font-size: 11px; color: var(--dsw-alias-label-tertiary); }
@@ -263,7 +290,7 @@ window.__ModuleLoader__.load({
       return h('img', { className, src: url || undefined, alt: alt || '', loading: 'lazy' })
     }
 
-    function GroupCard({ group, jobId, active, onToggle }) {
+    function GroupCard({ group, jobId, active, busy, onToggle, onExport }) {
       return h(
         'div',
         {
@@ -271,12 +298,27 @@ window.__ModuleLoader__.load({
           onClick: () => onToggle(group.id),
           title: group.coverFile,
         },
-        h(Thumb, { className: 'fs-cover', jobId, name: group.cover, alt: group.id }),
+        h(
+          'button',
+          {
+            className: 'fs-cover-btn',
+            type: 'button',
+            disabled: busy,
+            title: `导出这一组（${group.count} 张）到导出目录`,
+            onClick: (event) => {
+              event.stopPropagation()
+              onExport([group.id])
+            },
+          },
+          h(Thumb, { className: 'fs-cover', jobId, name: group.cover, alt: group.id }),
+          h('span', { className: 'fs-cover-hint' }, busy ? '导出中…' : `导出 ${group.count} 张`),
+        ),
         h(
           'div',
           { className: 'fs-group-body' },
           h('div', { className: 'fs-group-id' }, group.id),
           h('div', { className: 'fs-group-meta' }, `${group.count} 张图片 · ${group.faces} 张人脸`),
+          h('div', { className: 'fs-group-meta' }, '点封面导出这一组 · 点卡片看成员'),
         ),
       )
     }
@@ -296,7 +338,7 @@ window.__ModuleLoader__.load({
           h(
             'button',
             { className: 'fs-btn', disabled: busy, onClick: () => onExport([group.id]) },
-            '复制这一组',
+            '导出这一组',
           ),
         ),
         h(
@@ -948,6 +990,8 @@ window.__ModuleLoader__.load({
                   group,
                   jobId,
                   active: group.id === activeGroup,
+                  busy,
+                  onExport: doExport,
                   onToggle: (id) => setActiveGroup(id === activeGroup ? null : id),
                 }),
               ),
