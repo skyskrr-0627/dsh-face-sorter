@@ -18,6 +18,21 @@ window.__ModuleLoader__.load({
     const PANEL_ID = 'face-sorter'
     const STYLE_ID = 'dsh-face-sorter-style'
 
+    // 景别档位：判定在 host/python 侧（最大一张脸占画面高度的比例），这里只管标签和开关。
+    const SHOT_LEVELS = [
+      { id: 'closeup', label: '特写', hint: '脸高 ≥ 画面高 30%' },
+      { id: 'medium', label: '中景', hint: '脸高 ≥ 画面高 12%' },
+      { id: 'wide', label: '全景', hint: '脸更小或画面里人很多' },
+    ]
+
+    function shotSummary(shots) {
+      if (!shots) return ''
+      const parts = SHOT_LEVELS.filter((level) => shots[level.id]).map(
+        (level) => `${level.label} ${shots[level.id]}`,
+      )
+      return parts.join(' · ')
+    }
+
     const CSS = `
 .fs-panel {
   display: flex;
@@ -114,6 +129,29 @@ window.__ModuleLoader__.load({
 }
 .fs-pill-ok { color: var(--dsw-alias-state-success-primary); border-color: var(--dsw-alias-state-success-primary); }
 .fs-pill-bad { color: var(--dsw-alias-state-error-primary); border-color: var(--dsw-alias-state-error-primary); }
+.fs-shot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+.fs-shot:hover { border-color: var(--dsw-alias-border-l3); }
+.fs-shot-on {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.fs-shot-dot { width: 10px; text-align: center; font-size: 11px; color: var(--dsw-alias-brand-primary); }
+.fs-shot-n { font-size: 11px; color: var(--dsw-alias-label-tertiary); }
 .fs-hint { font-size: 12px; color: var(--dsw-alias-label-tertiary); }
 .fs-bar { height: 6px; border-radius: 999px; background: var(--dsw-alias-bg-layer-3); overflow: hidden; }
 .fs-bar-fill { height: 100%; background: var(--dsw-alias-brand-primary); transition: width 200ms linear; }
@@ -318,7 +356,11 @@ window.__ModuleLoader__.load({
           'div',
           { className: 'fs-group-body' },
           h('div', { className: 'fs-group-id' }, group.id),
-          h('div', { className: 'fs-group-meta' }, `${group.count} 张图片 · ${group.faces} 张人脸`),
+          h(
+            'div',
+            { className: 'fs-group-meta' },
+            `${group.count} 张图片 · ${group.faces} 张人脸` + (shotSummary(group.shots) ? ` · ${shotSummary(group.shots)}` : ''),
+          ),
           h('div', { className: 'fs-group-meta' }, '点封面导出这一组 · 点卡片看成员'),
         ),
       )
@@ -334,7 +376,11 @@ window.__ModuleLoader__.load({
           'div',
           { className: 'fs-detail-head' },
           h('div', { className: 'fs-group-id' }, group.id),
-          h('div', { className: 'fs-group-meta' }, `${group.count} 张图片 · ${group.faces} 张人脸`),
+          h(
+            'div',
+            { className: 'fs-group-meta' },
+            `${group.count} 张图片 · ${group.faces} 张人脸` + (shotSummary(group.shots) ? ` · ${shotSummary(group.shots)}` : ''),
+          ),
           h('div', { style: { flex: 1 } }),
           h(
             'button',
@@ -719,6 +765,7 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState(false)
       const [pickBusy, setPickBusy] = useState(false)
       const [destBusy, setDestBusy] = useState(false)
+      const [shots, setShots] = useState({ closeup: true, medium: true, wide: true })
       const pollRef = useRef(null)
 
       const refreshState = useCallback(async () => {
@@ -727,6 +774,7 @@ window.__ModuleLoader__.load({
           setState(data)
           setRoot((current) => current || data.settings.lastRoot || '')
           setThreshold((current) => (current === 0.42 ? data.settings.threshold : current))
+          if (data.settings.shots) setShots((current) => ({ ...current, ...data.settings.shots }))
         } catch (err) {
           setError(String(err.message || err))
         }
@@ -912,6 +960,26 @@ window.__ModuleLoader__.load({
         [jobId, result],
       )
 
+      // 景别开关：只影响「看什么、导出什么」，不重跑分析，点一下立刻生效。
+      const toggleShot = useCallback(
+        async (id) => {
+          const next = { ...shots, [id]: !shots[id] }
+          setShots(next)
+          setError('')
+          try {
+            const data = await api('/shots', { id: jobId || undefined, shots: next })
+            if (data.result) setResult(data.result)
+            setNotice(
+              `${SHOT_LEVELS.find((level) => level.id === id)?.label || id} 已${next[id] ? '打开' : '关闭'}`,
+            )
+          } catch (err) {
+            setShots(shots)
+            setError(String(err.message || err))
+          }
+        },
+        [shots, jobId],
+      )
+
       const doExport = useCallback(
         async (groups) => {
           if (!jobId) return
@@ -957,6 +1025,8 @@ window.__ModuleLoader__.load({
       const done = progress.done || 0
       const percent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
       const counts = result?.counts || job?.counts || null
+      const shotCounts = counts?.shots || {}
+      const isMatch = result?.mode === 'match'
       const groups = result?.groups || []
       const active = useMemo(() => groups.find((group) => group.id === activeGroup) || null, [groups, activeGroup])
       const ready = state?.ready
@@ -1057,6 +1127,34 @@ window.__ModuleLoader__.load({
                 result?.elapsed ? h('div', null, h('b', null, `${result.elapsed}s`), '用时') : null,
                 result?.threshold ? h('div', null, h('b', null, result.threshold.toFixed(2)), '阈值') : null,
               ),
+              // 分析完才出现：扫描时每张图已经判好景别，这里只是决定「现在看哪几档」。
+              !isMatch && counts?.shots
+                ? h(
+                    'div',
+                    { className: 'fs-row' },
+                    h('span', { className: 'fs-label' }, '看哪些景别'),
+                    SHOT_LEVELS.map((level) =>
+                      h(
+                        'button',
+                        {
+                          key: level.id,
+                          type: 'button',
+                          className: 'fs-shot' + (shots[level.id] ? ' fs-shot-on' : ''),
+                          title: `${level.hint}（${shots[level.id] ? '已打开' : '已关闭'}，点一下切换）`,
+                          onClick: () => toggleShot(level.id),
+                        },
+                        h('span', { className: 'fs-shot-dot' }, shots[level.id] ? '✓' : ''),
+                        h('span', null, level.label),
+                        h('span', { className: 'fs-shot-n' }, String(shotCounts[level.id] ?? 0)),
+                      ),
+                    ),
+                    h(
+                      'span',
+                      { className: 'fs-hint' },
+                      '分析时已经判好每张图的景别（脸高 ≥ 30% 特写、≥ 12% 中景、其余全景），这里只是挑现在看哪几档；关掉的档位不出现在分组和导出里，重新打开就回来。',
+                    ),
+                  )
+                : null,
               groups.length
                 ? h(
                     'div',

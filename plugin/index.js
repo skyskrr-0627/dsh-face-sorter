@@ -52,6 +52,15 @@ const IMG_EXT = new Set([
   ...RAW_EXT,
 ])
 
+// 景别（shot size）：扫描时 python 侧按「最大一张脸 ÷ 画面高度」的比例判定，
+// 这里只负责给三个档位命名、定开关默认值，并在读取结果时过滤。
+const SHOT_LEVELS = [
+  { id: 'closeup', label: '特写', min: 0.30 },
+  { id: 'medium', label: '中景', min: 0.12 },
+  { id: 'wide', label: '全景', min: 0 },
+]
+const DEFAULT_SHOTS = { closeup: true, medium: true, wide: true }
+
 const DEFAULT_SETTINGS = {
   pythonPath: DEFAULT_PYTHON,
   modelsDir: DEFAULT_MODELS,
@@ -61,6 +70,7 @@ const DEFAULT_SETTINGS = {
   maxSide: 1600,
   thumbSize: 192,
   lastRoot: '',
+  shots: { ...DEFAULT_SHOTS },
 }
 
 const jobs = new Map()
@@ -89,7 +99,8 @@ async function writeJson(file, data) {
 }
 
 async function readSettings() {
-  return { ...DEFAULT_SETTINGS, ...((await readJson(SETTINGS_PATH, {})) || {}) }
+  const stored = (await readJson(SETTINGS_PATH, {})) || {}
+  return { ...DEFAULT_SETTINGS, ...stored, shots: normalizeShots(stored.shots) }
 }
 
 async function saveSettings(patch) {
@@ -353,6 +364,83 @@ function buildResult(base, faces, threshold) {
 }
 
 // --------------------------------------------------------------------------- //
+// shot size (景别) — presentation-level filter
+// --------------------------------------------------------------------------- //
+// 扫描时 python 已经把每张图的 shot 写进 result.images（closeup / medium / wide /
+// none）。这里只做三件事：把开关值收敛成完整的三档、按开关过滤分组、统计每档张数。
+// 纯展示层：result.json 永远存全量结果，关掉一档只是读取时少给几条，随时能打开。
+function normalizeShots(input) {
+  const out = { ...DEFAULT_SHOTS }
+  if (input && typeof input === 'object') {
+    for (const level of SHOT_LEVELS) {
+      if (typeof input[level.id] === 'boolean') out[level.id] = input[level.id]
+    }
+  }
+  return out
+}
+
+function emptyShotCounts() {
+  const out = { closeup: 0, medium: 0, wide: 0, none: 0 }
+  return out
+}
+
+function applyShotFilter(result, shots) {
+  const wanted = normalizeShots(shots)
+  if (!result || !Array.isArray(result.groups) || !Array.isArray(result.images)) return result
+  const shotOfRel = new Map()
+  const shotCounts = emptyShotCounts()
+  for (const image of result.images) {
+    if (!image?.shot) continue
+    shotOfRel.set(image.rel, image.shot)
+    if (shotCounts[image.shot] === undefined) shotCounts[image.shot] = 0
+    shotCounts[image.shot] += 1
+  }
+  // 老运行没有景别数据、以图找人的结果也没有 —— 那种情况一律不过滤。
+  const active = shotOfRel.size > 0 && SHOT_LEVELS.some((level) => wanted[level.id] === false)
+  const keep = (rel) => {
+    if (!active) return true
+    const shot = shotOfRel.get(rel)
+    if (!shot) return true
+    return wanted[shot] !== false
+  }
+  const groups = []
+  for (const group of result.groups) {
+    const members = (group.members || []).filter((member) => keep(member?.rel))
+    const files = (group.files || []).filter(keep)
+    if (!members.length && !files.length) continue
+    const shots = emptyShotCounts()
+    for (const member of members) {
+      const shot = shotOfRel.get(member.rel)
+      if (shot) shots[shot] += 1
+    }
+    groups.push({
+      ...group,
+      id: result.mode === 'match' ? group.id : `person_${String(groups.length + 1).padStart(3, '0')}`,
+      count: files.length,
+      faces: members.length,
+      files,
+      members,
+      shots,
+    })
+  }
+  const groupOfRel = new Map()
+  for (const group of groups) for (const rel of group.files) groupOfRel.set(rel, group.id)
+  const images = result.images.map((image) => ({ ...image, group: groupOfRel.get(image.rel) || null }))
+  return {
+    ...result,
+    images,
+    groups,
+    shots: wanted,
+    counts: {
+      ...(result.counts || {}),
+      groups: groups.length,
+      faces: groups.reduce((total, group) => total + group.faces, 0),
+      shots: shotCounts,
+    },
+  }
+}
+
+// --------------------------------------------------------------------------- //
 // job lifecycle
 // --------------------------------------------------------------------------- //
 async function listImages(root) {
@@ -612,8 +700,10 @@ function uniqueName(taken, name) {
   return `${stem}_${randomUUID().slice(0, 6)}${ext}`
 }
 
-async function exportGroups(job, groupIds, destRoot, rootFix) {
-  const result = job.result
+// view 是过滤后的结果（景别开关），它的分组会重新编号，所以导出必须按 view 来挑，
+// 否则面板上的 person_002 会落到全量结果里另一个人身上。
+async function exportGroups(job, groupIds, destRoot, rootFix, view) {
+  const result = view || job.result
   if (!result?.groups) throw new Error('这次任务还没有结果')
   const selected = result.groups.filter((group) => !groupIds || groupIds.includes(group.id))
   if (!selected.length) throw new Error('没有选中任何分组')
@@ -761,6 +851,12 @@ function toolDefinition(ctx) {
         `运行 ${job.id} · 源目录 ${result.root}`,
         `图片 ${result.counts.images}（含人脸 ${result.counts.withFace}，无人脸 ${result.counts.noFace}）· 人脸 ${result.counts.faces} · 分组 ${result.counts.groups} · 阈值 ${result.threshold} · 用时 ${result.elapsed}s`,
       ]
+      const shots = result.counts?.shots
+      if (shots) {
+        lines.push(
+          `景别：特写 ${shots.closeup} · 中景 ${shots.medium} · 全景 ${shots.wide} · 无人脸 ${shots.none}`,
+        )
+      }
       for (const group of result.groups.slice(0, 40)) {
         const sample = group.files.slice(0, 3).join(', ')
         lines.push(`- ${group.id}: ${group.count} 张（示例：${sample}${group.files.length > 3 ? ' …' : ''}）`)
@@ -901,6 +997,7 @@ export function apply(ctx) {
               pythonPath: settings.pythonPath,
               modelsDir: settings.modelsDir,
               lastRoot: settings.lastRoot,
+              shots: settings.shots,
             },
             ready: {
               python: existsSync(settings.pythonPath),
@@ -1076,9 +1173,10 @@ export function apply(ctx) {
           const result = job.result || (await readJson(path.join(job.outDir, 'result.json'), null))
           if (!result) return json({ ok: false, error: '还没有结果' }, 409)
           const source = await ensureSource(job)
+          const settings = await readSettings()
           return json({
             ok: true,
-            result: { ...result, id: job.id, status: job.status },
+            result: { ...applyShotFilter(result, settings.shots), id: job.id, status: job.status },
             source: { root: source.root, original: source.original, missing: source.missing, autoFixed: source.fixed },
           })
         },
@@ -1163,13 +1261,43 @@ export function apply(ctx) {
             job.threshold = threshold
             await writeJson(path.join(job.outDir, 'result.json'), rebuilt)
             await saveSettings({ threshold })
-            return json({ ok: true, result: { ...rebuilt, id: job.id } })
+            const settings = await readSettings()
+            return json({ ok: true, result: { ...applyShotFilter(rebuilt, settings.shots), id: job.id } })
           } catch (error) {
             return json({ ok: false, error: String(error?.message || error) }, 400)
           }
         },
       }),
     'face-sorter: recluster route',
+  )
+
+  // 景别开关：只改展示层的过滤，不重跑 python、不重写 result.json。
+  ctx.effect(
+    () =>
+      ctx.connection.fetch.register({
+        path: '/api/face-sorter/shots',
+        methods: ['POST'],
+        requestBody: 'buffered',
+        fetch: async (request) => {
+          try {
+            const body = await request.json().catch(() => ({}))
+            const incoming = body?.shots
+            if (!incoming || typeof incoming !== 'object') {
+              return json({ ok: false, error: 'shots 需要是 {closeup, medium, wide} 对象' }, 400)
+            }
+            const shots = normalizeShots({ ...(await readSettings()).shots, ...incoming })
+            await saveSettings({ shots })
+            const job = await loadJob(String(body?.id || ''))
+            if (!job) return json({ ok: true, shots })
+            const result = job.result || (await readJson(path.join(job.outDir, 'result.json'), null))
+            if (!result) return json({ ok: true, shots })
+            return json({ ok: true, shots, result: { ...applyShotFilter(result, shots), id: job.id } })
+          } catch (error) {
+            return json({ ok: false, error: String(error?.message || error) }, 400)
+          }
+        },
+      }),
+    'face-sorter: shots route',
   )
 
   ctx.effect(
@@ -1225,7 +1353,11 @@ export function apply(ctx) {
                 sourceMissing: true,
               })
             }
-            const result = await exportGroups(job, groups, body?.dest, body?.rootFix)
+            const canonical =
+              job.result || (await readJson(path.join(job.outDir, 'result.json'), null)) || null
+            const settings = await readSettings()
+            const view = canonical ? applyShotFilter(canonical, settings.shots) : null
+            const result = await exportGroups(job, groups, body?.dest, body?.rootFix, view)
             return json({ ok: true, ...result, autoFixed: source.fixed })
           } catch (error) {
             return json({ ok: false, error: String(error?.message || error) }, 400)

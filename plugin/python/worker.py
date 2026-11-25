@@ -665,6 +665,20 @@ def run_match(job: dict) -> int:
 # --------------------------------------------------------------------------- #
 # main pipeline
 # --------------------------------------------------------------------------- #
+# 景别（shot size）只看画面里最大的一张脸占画面高度的比例：脸越大，景别越近。
+# 不额外引入模型，普通扫描就能顺带把特写 / 中景 / 全景标出来。
+SHOT_CLOSEUP = 0.30
+SHOT_MEDIUM = 0.12
+
+
+def shot_of(ratio: float) -> str:
+    if ratio >= SHOT_CLOSEUP:
+        return "closeup"
+    if ratio >= SHOT_MEDIUM:
+        return "medium"
+    return "wide"
+
+
 def main() -> int:
     job_path = Path(sys.argv[1])
     job = json.loads(job_path.read_text(encoding="utf-8"))
@@ -801,12 +815,26 @@ def main() -> int:
                     "emb": [round(float(v), 5) for v in emb],
                 }
             )
+        frame_h, frame_w = img.shape[:2]
+        big_face = max(
+            (
+                float(box[3] - box[1])
+                for box in boxes
+                if (box[2] - box[0]) >= min_face and (box[3] - box[1]) >= min_face
+            ),
+            default=0.0,
+        )
+        ratio = float(big_face) / float(frame_h) if frame_h else 0.0
         images.append(
             {
                 **record,
                 "faces": image_faces,
                 "kept": kept,
                 "status": "multi" if image_faces > 1 else ("single" if image_faces == 1 else "none"),
+                "width": int(frame_w),
+                "height": int(frame_h),
+                "shot": shot_of(ratio) if big_face > 0 else "none",
+                "shotRatio": round(ratio, 3),
             }
         )
         report("scanning", index + 1)
@@ -868,6 +896,10 @@ def main() -> int:
             "faces": len(faces),
             "groups": len(groups),
             "errors": len(errors),
+            "shots": {
+                level: sum(1 for i in images if i.get("shot") == level)
+                for level in ("closeup", "medium", "wide", "none")
+            },
         },
         "groups": groups,
         "noFace": sorted(i["rel"] for i in images if i["faces"] == 0),
@@ -880,6 +912,10 @@ def main() -> int:
                 "faces": i["faces"],
                 "status": i.get("status", ""),
                 "group": i.get("group"),
+                "width": i.get("width"),
+                "height": i.get("height"),
+                "shot": i.get("shot"),
+                "shotRatio": i.get("shotRatio"),
             }
             for i in images
         ],
@@ -910,6 +946,13 @@ def main() -> int:
         "- 源文件夹：`%s`" % root,
         "- 图片：%d（含人脸 %d，无人脸 %d）" % (result["counts"]["images"], result["counts"]["withFace"], result["counts"]["noFace"]),
         "- 人脸：%d，分组：%d，相似度阈值：%.2f" % (result["counts"]["faces"], result["counts"]["groups"], threshold),
+        "- 景别：特写 %d，中景 %d，全景 %d（无人脸 %d）"
+        % (
+            result["counts"]["shots"]["closeup"],
+            result["counts"]["shots"]["medium"],
+            result["counts"]["shots"]["wide"],
+            result["counts"]["shots"]["none"],
+        ),
         "- 用时：%ss" % elapsed,
         "",
         "| 分组 | 图片数 | 人脸数 |",
